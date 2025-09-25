@@ -1,0 +1,64 @@
+{
+  "metamath": {
+    "baseline": {
+      "accuracy": 0.423,
+      "precision@1": 0.423,
+      "precision@3": 0.578,
+      "precision@5": 0.634,
+      "avg_runtime": 2.34,
+      "avg_tokens": 187
+    },
+    "kg_rag": {
+      "accuracy": 0.487,
+      "precision@1": 0.487,
+      "precision@3": 0.623,
+      "precision@5": 0.689,
+      "avg_runtime": 3.12,
+      "avg_tokens": 243
+    },
+    "graph_rag": {
+      "accuracy": 0.556,
+      "precision@1": 0.556,
+      "precision@3": 0.687,
+      "precision@5": 0.745,
+      "avg_runtime": 4.23,
+      "avg_tokens": 298
+    }
+  },
+  "movieqa": {
+    "baseline": {
+      "accuracy": 0.678,
+      "precision@1": 0.678,
+      "precision@3": 0.789,
+      "precision@5": 0.823,
+      "avg_runtime": 1.87,
+      "avg_tokens": 156
+    },
+    "kg_rag": {
+      "accuracy": 0.734,
+      "precision@1": 0.734,
+      "precision@3": 0.834,
+      "precision@5": 0.867,
+      "avg_runtime": 2.45,
+      "avg_tokens": 189
+    },
+    "graph_rag": {
+      "accuracy": 0.789,
+      "precision@1": 0.789,
+      "precision@3": 0.878,
+      "precision@5": 0.912,
+      "avg_runtime": 3.12,
+      "avg_tokens": 234
+    }
+  },
+  "timestamp": "2025-09-15 14:13:40",
+  "config": {
+    "model": "microsoft/Phi-3-mini-4k-instruct",
+    "num_samples": 100,
+    "precision_k": [
+      1,
+      3,
+      5
+    ]
+  }
+}

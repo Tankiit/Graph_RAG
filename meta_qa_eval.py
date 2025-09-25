@@ -1103,8 +1103,9 @@ Answer:"""
 class MetaMathEvaluator:
     """Evaluate RAG vs KG-RAG on MetaMathQA"""
 
-    def __init__(self):
+    def __init__(self, model_name: str = "microsoft/Phi-3-mini-4k-instruct"):
         self.results = {}
+        self.model_name = model_name
 
     def calculate_precision_at_k(self, predicted_answers: List[str], ground_truth: str, k_values: List[int] = [1, 3, 5]) -> Dict[str, float]:
         """
@@ -1226,14 +1227,14 @@ class MetaMathEvaluator:
         print("\nInitializing systems...")
 
         # Baseline RAG (existing)
-        baseline_rag = MathRAG()
+        baseline_rag = MathRAG(model_name=self.model_name)
 
         # KG-RAG (existing)
         kg_builder = MathKnowledgeGraphBuilder()
-        kg_rag = MathKGRAG(kg_builder)
+        kg_rag = MathKGRAG(kg_builder, model_name=self.model_name)
 
         # New: Graph RAG using MetaMathQA as knowledge base
-        math_graph_rag = MathGraphRAG(kg_builder)
+        math_graph_rag = MathGraphRAG(kg_builder, model_name=self.model_name)
 
         # Build knowledge bases
         print("Building knowledge bases...")
@@ -1859,6 +1860,143 @@ def evaluate_test_folder(test_folder: str, log_dir: str = "./tensorboard_logs", 
         else:
             evaluator.evaluate_dataset(dataset_name=dataset_name, num_samples=num_samples, log_dir=log_dir)
 
+def compare_multiple_models(models: List[str], test_folder: str = None, dataset_name: str = "meta-math/MetaMathQA-40K",
+                          num_samples: int = 100, use_graph_rag: bool = False):
+    """
+    Compare multiple models on the same dataset and tasks
+    """
+    print(f"\n{'='*80}")
+    print(f"🔬 MULTI-MODEL COMPARISON")
+    print(f"{'='*80}")
+    print(f"Models to compare: {models}")
+    print(f"Dataset: {dataset_name}")
+    print(f"Samples: {num_samples}")
+    print(f"Graph RAG: {use_graph_rag}")
+    print("-" * 80)
+
+    all_model_results = {}
+
+    # Load dataset once
+    if test_folder:
+        print(f"📂 Loading datasets from folder: {test_folder}")
+        test_files = [f for f in os.listdir(test_folder) if f.endswith('.json')]
+        if not test_files:
+            print("❌ No JSON test files found!")
+            return
+
+        # Use first test file for comparison
+        test_file = test_files[0]
+        file_path = os.path.join(test_folder, test_file)
+        with open(file_path, 'r') as f:
+            test_data = json.load(f)
+
+        class LocalDataset:
+            def __init__(self, data):
+                self.data = {"train": data}
+            def __getitem__(self, split):
+                return self.data[split]
+
+        dataset = LocalDataset(test_data)
+        processor = UniversalQAProcessor(dataset, test_file.split('.')[0])
+        processor.process_dataset("train", min(len(test_data), num_samples))
+        processed_data = processor.processed_data
+    else:
+        print(f"📚 Loading dataset: {dataset_name}")
+        dataset = load_dataset(dataset_name, split="train")
+        processor = UniversalQAProcessor(dataset, dataset_name)
+        processor.process_dataset("train", num_samples)
+        processed_data = processor.processed_data
+
+    # Evaluate each model
+    for i, model_name in enumerate(models):
+        print(f"\n🤖 Model {i+1}/{len(models)}: {model_name}")
+        print("-" * 60)
+
+        try:
+            # Create model-specific log directory
+            model_log_dir = f"./tensorboard_logs/model_comparison/{model_name.replace('/', '_')}"
+            writer = SummaryWriter(model_log_dir)
+
+            # Run evaluation
+            evaluator = MetaMathEvaluator(model_name=model_name)
+            results = evaluator.run_comprehensive_evaluation(
+                processed_data,
+                use_graph_rag=use_graph_rag,
+                writer=writer
+            )
+
+            all_model_results[model_name] = results
+            writer.close()
+
+            print(f"✅ {model_name} evaluation completed")
+
+        except Exception as e:
+            print(f"❌ {model_name} evaluation failed: {e}")
+            all_model_results[model_name] = {"error": str(e)}
+
+    # Display comparison results
+    display_model_comparison(all_model_results)
+
+    # Save comparison results
+    comparison_file = f"model_comparison_results_{int(time.time())}.json"
+    with open(comparison_file, 'w') as f:
+        json.dump(all_model_results, f, indent=2)
+
+    print(f"\n💾 Comparison results saved to: {comparison_file}")
+    return all_model_results
+
+def display_model_comparison(results: Dict[str, Dict]):
+    """Display model comparison in a formatted table"""
+    print(f"\n{'='*100}")
+    print("🏆 MODEL COMPARISON RESULTS")
+    print(f"{'='*100}")
+
+    # Create comparison table
+    print(f"{'Model':<40} {'Accuracy':<10} {'P@1':<8} {'P@3':<8} {'P@5':<8} {'Runtime':<10} {'Tokens':<8}")
+    print("-" * 100)
+
+    for model_name, metrics in results.items():
+        if "error" in metrics:
+            print(f"{model_name:<40} ERROR: {metrics['error']}")
+            continue
+
+        accuracy = metrics.get("accuracy", 0) * 100 if isinstance(metrics.get("accuracy", 0), float) else 0
+        p1 = metrics.get("precision@1", 0) * 100 if isinstance(metrics.get("precision@1", 0), float) else 0
+        p3 = metrics.get("precision@3", 0) * 100 if isinstance(metrics.get("precision@3", 0), float) else 0
+        p5 = metrics.get("precision@5", 0) * 100 if isinstance(metrics.get("precision@5", 0), float) else 0
+        runtime = metrics.get("avg_runtime", 0)
+        tokens = metrics.get("avg_tokens", 0)
+
+        print(f"{model_name:<40} {accuracy:<10.1f}% {p1:<8.1f}% {p3:<8.1f}% {p5:<8.1f}% {runtime:<10.2f}s {tokens:<8.0f}")
+
+    # Find best performing model
+    best_model = None
+    best_accuracy = 0
+
+    for model_name, metrics in results.items():
+        if "error" not in metrics:
+            accuracy = metrics.get("accuracy", 0)
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                best_model = model_name
+
+    if best_model:
+        print(f"\n🥇 Best performing model: {best_model} (Accuracy: {best_accuracy*100:.1f}%)")
+
+    print(f"{'='*100}")
+
+# Model presets for easy comparison
+MODEL_PRESETS = {
+    "phi3_mini": "microsoft/Phi-3-mini-4k-instruct",
+    "llama2_7b": "meta-llama/Llama-2-7b-chat-hf",
+    "llama2_13b": "meta-llama/Llama-2-13b-chat-hf",
+    "mistral_7b": "mistralai/Mistral-7B-Instruct-v0.1",
+    "codellama_7b": "codellama/CodeLlama-7b-Instruct-hf",
+    "falcon_7b": "tiiuae/falcon-7b-instruct",
+    "vicuna_7b": "lmsys/vicuna-7b-v1.5",
+    "alpaca_7b": "chavinlo/alpaca-native"
+}
+
 def main():
     """Main function with argument parsing"""
     parser = argparse.ArgumentParser(description="Math QA Evaluation with KG-RAG")
@@ -1902,6 +2040,13 @@ def main():
         help="Model name for evaluation"
     )
     parser.add_argument(
+        "--compare_models",
+        nargs='+',
+        type=str,
+        default=None,
+        help="Compare multiple models (e.g., --compare_models microsoft/Phi-3-mini-4k-instruct meta-llama/Llama-2-7b-chat-hf)"
+    )
+    parser.add_argument(
         "--precision_k",
         nargs='+',
         type=int,
@@ -1932,7 +2077,20 @@ def main():
     print(f"Dataset: {args.dataset}")
     print(f"Test folder: {args.test_folder or 'Using HuggingFace dataset'}")
     print(f"Number of samples: {args.num_samples}")
-    print(f"Model: {args.model_name}")
+
+    # Handle model comparison vs single model
+    if args.compare_models:
+        print(f"Models to compare: {args.compare_models}")
+        models_to_use = []
+        for model in args.compare_models:
+            if model in MODEL_PRESETS:
+                models_to_use.append(MODEL_PRESETS[model])
+            else:
+                models_to_use.append(model)
+        print(f"Resolved models: {models_to_use}")
+    else:
+        print(f"Model: {args.model_name}")
+
     print(f"Precision@k values: {args.precision_k}")
     print(f"Graph RAG enabled: {args.graph_rag}")
     if args.graph_rag:
@@ -1942,8 +2100,18 @@ def main():
     print(f"Tensorboard logs: {args.log_dir}")
     print("-" * 50)
 
-    # Run evaluation
-    if args.graph_rag:
+    # Run evaluation - either comparison or single model
+    if args.compare_models:
+        # Multi-model comparison
+        compare_multiple_models(
+            models=models_to_use,
+            test_folder=args.test_folder,
+            dataset_name=args.dataset,
+            num_samples=args.num_samples,
+            use_graph_rag=args.graph_rag
+        )
+    elif args.graph_rag:
+        # Single model Graph RAG evaluation
         evaluate_test_folder(
             test_folder=args.test_folder,
             log_dir=args.log_dir,
@@ -1952,6 +2120,7 @@ def main():
             use_graph_rag=True
         )
     else:
+        # Single model standard evaluation
         evaluate_test_folder(
             test_folder=args.test_folder,
             log_dir=args.log_dir,
